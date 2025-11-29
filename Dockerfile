@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libsm6 \
     libxext6 \
-    libgl1-mesa-glx \
+    libgl1 \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
