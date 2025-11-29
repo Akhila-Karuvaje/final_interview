@@ -5,7 +5,6 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python packages
@@ -13,27 +12,21 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# ✅ KEY FIX: Use 'from nltk import downloader' to avoid circular import
-RUN python -c "from nltk import downloader; \
-    d = downloader.Downloader(); \
-    d.download('wordnet'); \
-    d.download('omw-1.4'); \
-    d.download('punkt'); \
-    d.download('punkt_tab'); \
-    d.download('stopwords'); \
-    print('✅ NLTK data downloaded')"
-
-# Copy application
+# Copy application code
 COPY . .
 
-# Create directories
-RUN mkdir -p uploads nltk_data
+# Create necessary directories
+RUN mkdir -p uploads nltk_data /root/nltk_data
 
-# Environment variables
+# Set environment variables
 ENV PORT=10000
 ENV NLTK_DATA=/root/nltk_data
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE $PORT
 
+# ✅ CRITICAL: NLTK data will download at RUNTIME (first app start)
+# This avoids the circular import issue during Docker build
+
 # Start app with Gunicorn
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 app:app
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 180 --preload app:app"]
