@@ -1,0 +1,17 @@
+Flask
+google-generativeai
+SpeechRecognition
+pydub
+pandas
+nltk
+reportlab
+opencv-python-headless
+librosa
+numpy
+sentence-transformers
+transformers
+torch
+whisper
+mediapipe
+protobuf==3.20.*
+soundfile
