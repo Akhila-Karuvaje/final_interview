@@ -28,14 +28,17 @@ COPY requirements.txt .
 RUN pip install --upgrade pip wheel setuptools
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Download NLTK corpora at build time to avoid runtime errors
+RUN python -m nltk.downloader punkt stopwords wordnet
+
 # Copy app code
 COPY . .
 
-# Expose port (Render sets PORT env; this is just informative)
-EXPOSE 5000
-
 # Create uploads dir (app uses uploads/)
 RUN mkdir -p /app/uploads
+
+# Expose port (Render sets PORT env; this is just informative)
+EXPOSE 5000
 
 # Default environment variables (can be overridden in Render/production)
 ENV PORT=5000
@@ -43,4 +46,3 @@ ENV FLASK_ENV=production
 
 # Start the app
 CMD ["python", "app.py"]
-
