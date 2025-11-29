@@ -3,9 +3,8 @@ import google.generativeai as genai
 import os
 import speech_recognition as sr
 import pandas as pd
-import nltk
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
+# ❌ DON'T import nltk here - it will fail!
+# import nltk
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 import re
@@ -15,53 +14,62 @@ import json
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# ✅ NLTK setup with production handling
+# ✅ CRITICAL FIX: Download NLTK data BEFORE importing nltk modules
+import nltk
 nltk_data_dir = os.environ.get('NLTK_DATA', os.path.join(os.getcwd(), 'nltk_data'))
 os.makedirs(nltk_data_dir, exist_ok=True)
 nltk.data.path.insert(0, nltk_data_dir)
 
-# Download NLTK data with error handling
-for resource in ['punkt_tab', 'punkt', 'stopwords']:
-    try:
-        nltk.data.find(f'tokenizers/{resource}' if 'punkt' in resource else f'corpora/{resource}')
-        print(f"✓ NLTK {resource} already downloaded")
-    except LookupError:
-        print(f"Downloading NLTK {resource}...")
-        try:
-            nltk.download(resource, download_dir=nltk_data_dir, quiet=True)
-            print(f"✓ NLTK {resource} downloaded successfully")
-        except Exception as e:
-            print(f"⚠ Warning downloading {resource}: {e}")
+# Download WordNet FIRST (this is what's missing!)
+print("Downloading NLTK data...")
+try:
+    nltk.download('wordnet', download_dir=nltk_data_dir, quiet=True)
+    nltk.download('omw-1.4', download_dir=nltk_data_dir, quiet=True)  # WordNet dependency
+    nltk.download('punkt', download_dir=nltk_data_dir, quiet=True)
+    nltk.download('punkt_tab', download_dir=nltk_data_dir, quiet=True)
+    nltk.download('stopwords', download_dir=nltk_data_dir, quiet=True)
+    print("✅ NLTK data downloaded successfully")
+except Exception as e:
+    print(f"⚠️ NLTK download warning: {e}")
+
+# NOW it's safe to import NLTK utilities
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
 
 # ✅ Gemini API config from environment variable
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 if not GOOGLE_API_KEY:
-    raise ValueError("⚠️ GOOGLE_API_KEY environment variable not set!")
+    print("⚠️ WARNING: GOOGLE_API_KEY not set!")
+    # Don't raise error yet - allow app to start for debugging
+else:
+    genai.configure(api_key=GOOGLE_API_KEY)
+    model = genai.GenerativeModel('gemini-2.0-flash')
 
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+# ⚠️ VIDEO FEATURES: Only load if libraries are installed
+USE_VIDEO_FEATURES = False
+model_whisper = None
+model_bert = None
 
-# ⚠️ OPTIONAL: Load ML models only if video features are enabled
-# Comment out these lines to reduce memory usage on free tier
-USE_VIDEO_FEATURES = os.environ.get('USE_VIDEO_FEATURES', 'false').lower() == 'true'
-
-if USE_VIDEO_FEATURES:
-    try:
-        import cv2
-        import librosa
-        import numpy as np
-        from sentence_transformers import SentenceTransformer, util
-        import whisper
-        import mediapipe as mp
-        
+try:
+    import cv2
+    import librosa
+    import numpy as np
+    from sentence_transformers import SentenceTransformer, util
+    import whisper
+    import mediapipe as mp
+    
+    if os.environ.get('USE_VIDEO_FEATURES', 'false').lower() == 'true':
+        print("Loading video models... (this may take a minute)")
         model_whisper = whisper.load_model("small")
         model_bert = SentenceTransformer('all-MiniLM-L6-v2')
+        USE_VIDEO_FEATURES = True
         print("✅ Video features enabled")
-    except Exception as e:
-        print(f"⚠️ Video features disabled due to: {e}")
-        USE_VIDEO_FEATURES = False
-else:
-    print("ℹ️ Video features disabled (set USE_VIDEO_FEATURES=true to enable)")
+    else:
+        print("ℹ️ Video libraries available but disabled")
+except ImportError as e:
+    print(f"ℹ️ Video features unavailable: {e}")
+except Exception as e:
+    print(f"⚠️ Video features failed: {e}")
 
 # ============================================================
 # ===== Utility Functions ====================================
@@ -252,11 +260,9 @@ def submit_video_answer(qid):
     file.save(filepath)
 
     try:
-        # Transcribe using Whisper
         result = model_whisper.transcribe(filepath)
         transcript = result['text']
 
-        # Ask Gemini for analysis
         prompt = f"""
         You are an expert interview evaluator.
         Analyze this interview answer for question ID {qid} and return JSON in this exact format:
@@ -324,9 +330,10 @@ def result():
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy"}), 200
+    return jsonify({"status": "healthy", "nltk_ready": True}), 200
 
 # ============================================================
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🚀 Starting app on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
