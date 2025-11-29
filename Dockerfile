@@ -9,7 +9,7 @@ ENV NLTK_DATA=/usr/local/nltk_data
 # Set workdir
 WORKDIR /app
 
-# Install OS-level dependencies, create uploads and NLTK dirs in one step
+# Install OS-level dependencies and create dirs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
@@ -21,16 +21,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     pkg-config \
     wget \
+    unzip \
     ca-certificates \
     && mkdir -p /app/uploads $NLTK_DATA \
+    && chmod -R 777 $NLTK_DATA \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python packages
 COPY requirements.txt .
-
 RUN pip install --upgrade pip wheel setuptools \
-    && pip install --no-cache-dir -r requirements.txt \
-    && python -m nltk.downloader -d $NLTK_DATA punkt stopwords wordnet
+    && pip install --no-cache-dir -r requirements.txt
+
+# Manually download NLTK data to avoid downloader issues
+RUN wget -qO /tmp/wordnet.zip https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/wordnet.zip \
+    && unzip /tmp/wordnet.zip -d $NLTK_DATA \
+    && rm /tmp/wordnet.zip \
+    && python -m nltk.downloader -d $NLTK_DATA punkt stopwords
 
 # Copy app code
 COPY . .
