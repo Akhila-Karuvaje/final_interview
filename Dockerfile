@@ -1,11 +1,10 @@
 # Use slim Python base
 FROM python:3.10-slim
 
-# Avoid creation of .pyc files and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install OS-level dependencies needed for audio/video/ML packages
+# Install OS-level dependencies needed for audio/video/ML packages + NLTK downloader tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
@@ -16,6 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libgl1 \
     pkg-config \
+    wget \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Set workdir
@@ -24,25 +25,23 @@ WORKDIR /app
 # Copy requirements and install first (leverages Docker cache)
 COPY requirements.txt .
 
-# Upgrade pip and install wheel first to reduce build issues
 RUN pip install --upgrade pip wheel setuptools
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download NLTK corpora at build time to avoid runtime errors
-RUN python -m nltk.downloader punkt stopwords wordnet
+# Set NLTK data directory and download corpora
+ENV NLTK_DATA=/usr/local/nltk_data
+RUN mkdir -p $NLTK_DATA
+RUN python -m nltk.downloader -d $NLTK_DATA punkt stopwords wordnet
 
 # Copy app code
 COPY . .
 
-# Create uploads dir (app uses uploads/)
+# Create uploads dir
 RUN mkdir -p /app/uploads
 
-# Expose port (Render sets PORT env; this is just informative)
 EXPOSE 5000
 
-# Default environment variables (can be overridden in Render/production)
 ENV PORT=5000
 ENV FLASK_ENV=production
 
-# Start the app
 CMD ["python", "app.py"]
