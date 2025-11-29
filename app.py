@@ -11,33 +11,60 @@ from reportlab.pdfgen import canvas
 import re
 import json
 
-# === Extra imports for video evaluation ===
-import cv2
-import librosa
-import numpy as np
-from sentence_transformers import SentenceTransformer, util
-import whisper
-import mediapipe as mp
-
 # ----------------- CONFIG -----------------
-nltk.download('punkt_tab')
-nltk.download('punkt')
-nltk.download('stopwords')
-
 app = Flask(__name__)
-app.secret_key = 'my_super_secret_key_456789'
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# Gemini API config
-GOOGLE_API_KEY = 'AIzaSyDqwmsgjiKz727LHUFMiJ5A2FEOSBF_Qqw'
+# ✅ NLTK setup with production handling
+nltk_data_dir = os.environ.get('NLTK_DATA', os.path.join(os.getcwd(), 'nltk_data'))
+os.makedirs(nltk_data_dir, exist_ok=True)
+nltk.data.path.insert(0, nltk_data_dir)
+
+# Download NLTK data with error handling
+for resource in ['punkt_tab', 'punkt', 'stopwords']:
+    try:
+        nltk.data.find(f'tokenizers/{resource}' if 'punkt' in resource else f'corpora/{resource}')
+        print(f"✓ NLTK {resource} already downloaded")
+    except LookupError:
+        print(f"Downloading NLTK {resource}...")
+        try:
+            nltk.download(resource, download_dir=nltk_data_dir, quiet=True)
+            print(f"✓ NLTK {resource} downloaded successfully")
+        except Exception as e:
+            print(f"⚠ Warning downloading {resource}: {e}")
+
+# ✅ Gemini API config from environment variable
+GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
+if not GOOGLE_API_KEY:
+    raise ValueError("⚠️ GOOGLE_API_KEY environment variable not set!")
+
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-# Load ML models for video evaluation
-model_whisper = whisper.load_model("small")
-model_bert = SentenceTransformer('all-MiniLM-L6-v2')
+# ⚠️ OPTIONAL: Load ML models only if video features are enabled
+# Comment out these lines to reduce memory usage on free tier
+USE_VIDEO_FEATURES = os.environ.get('USE_VIDEO_FEATURES', 'false').lower() == 'true'
+
+if USE_VIDEO_FEATURES:
+    try:
+        import cv2
+        import librosa
+        import numpy as np
+        from sentence_transformers import SentenceTransformer, util
+        import whisper
+        import mediapipe as mp
+        
+        model_whisper = whisper.load_model("small")
+        model_bert = SentenceTransformer('all-MiniLM-L6-v2')
+        print("✅ Video features enabled")
+    except Exception as e:
+        print(f"⚠️ Video features disabled due to: {e}")
+        USE_VIDEO_FEATURES = False
+else:
+    print("ℹ️ Video features disabled (set USE_VIDEO_FEATURES=true to enable)")
 
 # ============================================================
-# ===== Utility Functions (Audio Interview Part) =============
+# ===== Utility Functions ====================================
 # ============================================================
 
 def SpeechToText():
@@ -59,12 +86,16 @@ def SpeechToText():
         return f"Unexpected error: {str(e)}"
 
 def clean_answer(answer):
-    words = word_tokenize(answer)
-    stop_words = set(stopwords.words('english'))
-    return ' '.join([word for word in words if word.lower() not in stop_words])
+    try:
+        words = word_tokenize(answer)
+        stop_words = set(stopwords.words('english'))
+        return ' '.join([word for word in words if word.lower() not in stop_words])
+    except Exception as e:
+        print(f"Clean answer error: {e}")
+        return answer
 
 # ============================================================
-# ===== Routes for Main Project (Gemini-based) ===============
+# ===== Routes ===============================================
 # ============================================================
 
 @app.route('/')
@@ -84,25 +115,27 @@ def regenerate_questions():
     job = session.get('job_title')
     level = session.get('difficulty')
 
-    # ✅ Always generate fresh questions from Gemini
     prompt = f"""
     Generate exactly 10 interview questions for the job role: {job} 
     with difficulty level: {level}. 
     Only return the 10 questions in plain text, numbered 1 to 10. 
     Do not include any introduction or extra comments.
     """
-    response = model.generate_content(prompt)
+    
+    try:
+        response = model.generate_content(prompt)
+        raw_questions = response.text.strip().split("\n")
+        questions = []
+        for q in raw_questions:
+            match = re.match(r'^\d+[\).\s-]+(.*)', q.strip())
+            if match:
+                questions.append(match.group(1).strip())
 
-    # ✅ Extract only the question texts
-    raw_questions = response.text.strip().split("\n")
-    questions = []
-    for q in raw_questions:
-        match = re.match(r'^\d+[\).\s-]+(.*)', q.strip())
-        if match:
-            questions.append(match.group(1).strip())
-
-    questions = questions[:10]  # ✅ Ensure only 10
-    session['questions'] = questions  # ✅ Save fresh set
+        questions = questions[:10]
+        session['questions'] = questions
+    except Exception as e:
+        print(f"Error generating questions: {e}")
+        session['questions'] = ["Error generating questions. Please try again."]
 
     return redirect(url_for('questions'))
 
@@ -144,6 +177,9 @@ def get_analysis():
         return jsonify({"error": f"Speech recognition failed: {e}"}), 500
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
     return jsonify({
         "transcription": transcribed_text,
@@ -175,7 +211,8 @@ def submit_answer(qid):
             result = json.loads(json_str)
         else:
             raise ValueError("No JSON object found")
-    except Exception:
+    except Exception as e:
+        print(f"Error analyzing answer: {e}")
         result = {
             "correct_answer": "Unable to parse response.",
             "validation": "Unknown",
@@ -197,10 +234,15 @@ def submit_answer(qid):
 
 @app.route('/video_interview')
 def video_interview():
+    if not USE_VIDEO_FEATURES:
+        return "Video features are disabled. Set USE_VIDEO_FEATURES=true environment variable.", 503
     return render_template('video_interview.html')
 
 @app.route('/submit_video_answer/<qid>', methods=['POST'])
 def submit_video_answer(qid):
+    if not USE_VIDEO_FEATURES:
+        return jsonify({"error": "Video features disabled"}), 503
+        
     if 'video' not in request.files:
         return jsonify({"error": "No video uploaded"}), 400
 
@@ -209,25 +251,25 @@ def submit_video_answer(qid):
     filepath = os.path.join("uploads", f"answer_{qid}.webm")
     file.save(filepath)
 
-    # Step 1: Transcribe user's speech using Whisper
-    result = model_whisper.transcribe(filepath)
-    transcript = result['text']
-
-    # Step 2: Ask Gemini to analyze and give scores + feedback
-    prompt = f"""
-    You are an expert interview evaluator.
-    Analyze this interview answer for question ID {qid} and return JSON in this exact format:
-    {{
-        "Confidence Score": <float between 0 and 1>,
-        "Content Relevance": <float between 0 and 1>,
-        "Fluency Score": <float between 0 and 1>,
-        "Feedback": "3–5 line constructive feedback on how the user can improve"
-    }}
-
-    User's answer transcript: "{transcript}"
-    """
-
     try:
+        # Transcribe using Whisper
+        result = model_whisper.transcribe(filepath)
+        transcript = result['text']
+
+        # Ask Gemini for analysis
+        prompt = f"""
+        You are an expert interview evaluator.
+        Analyze this interview answer for question ID {qid} and return JSON in this exact format:
+        {{
+            "Confidence Score": <float between 0 and 1>,
+            "Content Relevance": <float between 0 and 1>,
+            "Fluency Score": <float between 0 and 1>,
+            "Feedback": "3–5 line constructive feedback on how the user can improve"
+        }}
+
+        User's answer transcript: "{transcript}"
+        """
+
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
@@ -236,35 +278,28 @@ def submit_video_answer(qid):
             json_str = json_match.group()
             scores = json.loads(json_str)
         else:
-            # Fallback if parsing fails
-            scores = {
-                "Confidence Score": 0.0,
-                "Content Relevance": 0.0,
-                "Fluency Score": 0.0,
-                "Feedback": "Unable to analyze answer properly."
-            }
-    except Exception:
+            raise ValueError("No JSON found")
+    except Exception as e:
+        print(f"Video analysis error: {e}")
         scores = {
             "Confidence Score": 0.0,
             "Content Relevance": 0.0,
             "Fluency Score": 0.0,
-            "Feedback": "AI evaluation failed due to a technical issue."
+            "Feedback": "Unable to analyze video properly."
         }
+        transcript = "Transcription failed"
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
 
-    # Step 3: Compute final evaluation
-    try:
-        final_eval = round(
-            (scores["Confidence Score"] +
-             scores["Content Relevance"] +
-             scores["Fluency Score"]) / 3 * 100, 2
-        )
-    except Exception:
-        final_eval = 0.0
+    final_eval = round(
+        (scores["Confidence Score"] +
+         scores["Content Relevance"] +
+         scores["Fluency Score"]) / 3 * 100, 2
+    )
 
-    # ✅ Step 4: Save feedback for result page
     session['video_feedback'] = scores["Feedback"]
 
-    # Step 5: Send back to frontend
     return jsonify({
         "Confidence Score": scores["Confidence Score"],
         "Content Relevance": scores["Content Relevance"],
@@ -284,7 +319,14 @@ def result():
     return render_template('result.html', feedback=feedback)
 
 # ============================================================
+# ===== Health Check (for Render) ===========================
+# ============================================================
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"}), 200
+
+# ============================================================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
