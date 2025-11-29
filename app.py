@@ -12,44 +12,66 @@ import json
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# ----------------- NLTK SETUP (CRITICAL FIX) -----------------
+# ----------------- NLTK SETUP (RUNTIME DOWNLOAD) -----------------
 print("🔧 Setting up NLTK...")
 
 import nltk
+import ssl
+
+# Disable SSL verification for NLTK downloads (common Render issue)
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+
+# Set NLTK data paths
 nltk_data_paths = ['/root/nltk_data', os.path.join(os.getcwd(), 'nltk_data')]
 for path in nltk_data_paths:
+    os.makedirs(path, exist_ok=True)
     if path not in nltk.data.path:
         nltk.data.path.insert(0, path)
 
 print(f"📂 NLTK data paths: {nltk.data.path[:3]}")
 
-# Runtime download fallback
-try:
-    from nltk import downloader
-    resources = {
-        'wordnet': 'corpora/wordnet',
-        'omw-1.4': 'corpora/omw-1.4',
-        'punkt': 'tokenizers/punkt',
-        'punkt_tab': 'tokenizers/punkt_tab',
-        'stopwords': 'corpora/stopwords'
-    }
-    
-    for name, path in resources.items():
+# Download NLTK data at runtime (avoiding Docker build issues)
+resources_to_download = ['wordnet', 'omw-1.4', 'punkt', 'punkt_tab', 'stopwords']
+
+for resource in resources_to_download:
+    try:
+        # Try to find the resource
+        if resource in ['wordnet', 'stopwords']:
+            nltk.data.find(f'corpora/{resource}')
+        elif resource == 'omw-1.4':
+            nltk.data.find('corpora/omw-1.4')
+        else:
+            nltk.data.find(f'tokenizers/{resource}')
+        print(f"  ✅ {resource} found")
+    except LookupError:
+        # Download if not found
+        print(f"  ⏳ Downloading {resource}...")
         try:
-            nltk.data.find(path)
-            print(f"  ✅ {name} found")
-        except LookupError:
-            print(f"  ⏳ Downloading {name}...")
-            downloader.download(name, quiet=True)
-            print(f"  ✅ {name} downloaded")
-except Exception as e:
-    print(f"⚠️ NLTK setup warning: {e}")
+            nltk.download(resource, download_dir=nltk_data_paths[0], quiet=False)
+            print(f"  ✅ {resource} downloaded successfully")
+        except Exception as e:
+            print(f"  ⚠️ Failed to download {resource}: {e}")
 
 # NOW safe to import NLTK functions
 print("📥 Importing NLTK utilities...")
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-print("✅ NLTK ready!")
+try:
+    from nltk.tokenize import word_tokenize
+    from nltk.corpus import stopwords
+    print("✅ NLTK ready!")
+except Exception as e:
+    print(f"❌ NLTK import failed: {e}")
+    # Define dummy functions so app doesn't crash
+    def word_tokenize(text):
+        return text.split()
+    class DummyStopwords:
+        def words(self, lang):
+            return set()
+    stopwords = DummyStopwords()
 
 # ----------------- GOOGLE AI CONFIG -----------------
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
