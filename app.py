@@ -12,84 +12,7 @@ import json
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# ----------------- ULTIMATE NLTK FIX -----------------
-print("🔧 Setting up NLTK with WordNet workaround...")
-
-# Set environment variable to prevent NLTK from auto-loading WordNet
-os.environ['NLTK_DATA'] = '/root/nltk_data'
-
-# Monkey-patch to prevent WordNet loading during import
-import sys
-from unittest.mock import MagicMock
-
-# Create a fake wordnet module that doesn't crash
-fake_wordnet = MagicMock()
-fake_wordnet.morphy = MagicMock(return_value=None)
-sys.modules['nltk.corpus.wordnet'] = fake_wordnet
-
-# NOW we can safely import nltk
-import nltk
-
-# Remove the fake module after import
-if 'nltk.corpus.wordnet' in sys.modules:
-    del sys.modules['nltk.corpus.wordnet']
-
-# Set NLTK data paths
-nltk_data_dir = '/root/nltk_data'
-os.makedirs(nltk_data_dir, exist_ok=True)
-nltk.data.path.insert(0, nltk_data_dir)
-
-print(f"📂 NLTK data path: {nltk_data_dir}")
-
-# Download NLTK data (now that nltk is imported)
-import ssl
-try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
-
-resources = ['wordnet', 'omw-1.4', 'punkt', 'punkt_tab', 'stopwords']
-print("📥 Downloading NLTK resources...")
-for resource in resources:
-    try:
-        # Check if already exists
-        if resource in ['wordnet', 'stopwords']:
-            path = f'corpora/{resource}'
-        elif resource == 'omw-1.4':
-            path = 'corpora/omw-1.4'
-        else:
-            path = f'tokenizers/{resource}'
-        
-        try:
-            nltk.data.find(path)
-            print(f"  ✅ {resource} already exists")
-        except LookupError:
-            print(f"  ⏳ Downloading {resource}...")
-            nltk.download(resource, download_dir=nltk_data_dir, quiet=True)
-            print(f"  ✅ {resource} downloaded")
-    except Exception as e:
-        print(f"  ⚠️ {resource} download failed: {e}")
-
-# NOW import NLTK utilities
-print("📦 Importing NLTK utilities...")
-try:
-    from nltk.tokenize import word_tokenize
-    from nltk.corpus import stopwords
-    print("✅ NLTK ready!")
-except Exception as e:
-    print(f"⚠️ NLTK import error: {e}")
-    # Fallback functions
-    def word_tokenize(text):
-        return text.split()
-    
-    class DummyStopwords:
-        def words(self, lang='english'):
-            return {'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being'}
-    
-    stopwords = DummyStopwords()
-    print("⚠️ Using fallback tokenizer and stopwords")
+print("🚀 Starting Interview App...")
 
 # ----------------- GOOGLE AI CONFIG -----------------
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
@@ -128,6 +51,29 @@ else:
 # ===== Utility Functions ====================================
 # ============================================================
 
+def simple_tokenize(text):
+    """Simple word tokenizer - replaces nltk.word_tokenize"""
+    return re.findall(r'\b\w+\b', text.lower())
+
+def get_stopwords():
+    """Common English stopwords - replaces nltk.corpus.stopwords"""
+    return {
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+        'to', 'was', 'will', 'with', 'the', 'this', 'but', 'they', 'have',
+        'had', 'what', 'when', 'where', 'who', 'which', 'why', 'how'
+    }
+
+def clean_answer(answer):
+    """Clean answer by removing stopwords"""
+    try:
+        words = simple_tokenize(answer)
+        stop_words = get_stopwords()
+        return ' '.join([word for word in words if word not in stop_words])
+    except Exception as e:
+        print(f"Clean answer error: {e}")
+        return answer
+
 def SpeechToText():
     r = sr.Recognizer()
     try:
@@ -145,15 +91,6 @@ def SpeechToText():
         return f"Could not request results from Google Speech Recognition service; {e}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
-
-def clean_answer(answer):
-    try:
-        words = word_tokenize(answer)
-        stop_words = set(stopwords.words('english'))
-        return ' '.join([word for word in words if word.lower() not in stop_words])
-    except Exception as e:
-        print(f"Clean answer error: {e}")
-        return answer
 
 # ============================================================
 # ===== Routes ===============================================
@@ -383,9 +320,11 @@ def result():
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy", "nltk_ready": True}), 200
+    return jsonify({"status": "healthy"}), 200
 
 # ============================================================
+print("✅ App initialized successfully!")
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
     print(f"🚀 Starting app on port {port}")
