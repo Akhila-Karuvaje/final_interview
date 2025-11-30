@@ -28,5 +28,5 @@ EXPOSE $PORT
 # ✅ CRITICAL: NLTK data will download at RUNTIME (first app start)
 # This avoids the circular import issue during Docker build
 
-# Start app with Gunicorn
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 180 --preload app:app"]
+# Start app with Gunicorn (REMOVE --preload flag!)
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 180 app:app"]
