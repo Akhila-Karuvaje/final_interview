@@ -12,13 +12,40 @@ import json
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# ----------------- NLTK SETUP (RUNTIME DOWNLOAD) -----------------
-print("🔧 Setting up NLTK...")
+# ----------------- CRITICAL FIX: Download NLTK Data FIRST -----------------
+print("🔧 Downloading NLTK data BEFORE importing nltk...")
 
+import subprocess
+import sys
+
+# Download using Python subprocess to avoid importing nltk
+nltk_data_dir = '/root/nltk_data'
+os.makedirs(nltk_data_dir, exist_ok=True)
+
+resources = ['wordnet', 'omw-1.4', 'punkt', 'punkt_tab', 'stopwords']
+for resource in resources:
+    try:
+        # Use subprocess to download without importing nltk modules
+        result = subprocess.run(
+            [sys.executable, '-m', 'nltk.downloader', '-d', nltk_data_dir, resource],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0:
+            print(f"  ✅ {resource} downloaded")
+        else:
+            print(f"  ℹ️ {resource} may already exist or download failed")
+    except Exception as e:
+        print(f"  ⚠️ Error downloading {resource}: {e}")
+
+print("📦 NLTK data download complete, now importing nltk...")
+
+# ----------------- NOW SAFE TO IMPORT NLTK -----------------
 import nltk
 import ssl
 
-# Disable SSL verification for NLTK downloads (common Render issue)
+# Disable SSL verification for NLTK
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
@@ -27,45 +54,19 @@ else:
     ssl._create_default_https_context = _create_unverified_https_context
 
 # Set NLTK data paths
-nltk_data_paths = ['/root/nltk_data', os.path.join(os.getcwd(), 'nltk_data')]
-for path in nltk_data_paths:
-    os.makedirs(path, exist_ok=True)
-    if path not in nltk.data.path:
-        nltk.data.path.insert(0, path)
+nltk.data.path.insert(0, nltk_data_dir)
+nltk.data.path.insert(0, os.path.join(os.getcwd(), 'nltk_data'))
 
-print(f"📂 NLTK data paths: {nltk.data.path[:3]}")
+print(f"📂 NLTK data paths: {nltk.data.path[:2]}")
 
-# Download NLTK data at runtime (avoiding Docker build issues)
-resources_to_download = ['wordnet', 'omw-1.4', 'punkt', 'punkt_tab', 'stopwords']
-
-for resource in resources_to_download:
-    try:
-        # Try to find the resource
-        if resource in ['wordnet', 'stopwords']:
-            nltk.data.find(f'corpora/{resource}')
-        elif resource == 'omw-1.4':
-            nltk.data.find('corpora/omw-1.4')
-        else:
-            nltk.data.find(f'tokenizers/{resource}')
-        print(f"  ✅ {resource} found")
-    except LookupError:
-        # Download if not found
-        print(f"  ⏳ Downloading {resource}...")
-        try:
-            nltk.download(resource, download_dir=nltk_data_paths[0], quiet=False)
-            print(f"  ✅ {resource} downloaded successfully")
-        except Exception as e:
-            print(f"  ⚠️ Failed to download {resource}: {e}")
-
-# NOW safe to import NLTK functions
-print("📥 Importing NLTK utilities...")
+# Import NLTK utilities
 try:
     from nltk.tokenize import word_tokenize
     from nltk.corpus import stopwords
     print("✅ NLTK ready!")
 except Exception as e:
-    print(f"❌ NLTK import failed: {e}")
-    # Define dummy functions so app doesn't crash
+    print(f"⚠️ NLTK import warning: {e}")
+    # Fallback functions
     def word_tokenize(text):
         return text.split()
     class DummyStopwords:
@@ -295,11 +296,9 @@ def submit_video_answer(qid):
     file.save(filepath)
 
     try:
-        # Transcribe using Whisper
         result = model_whisper.transcribe(filepath)
         transcript = result['text']
 
-        # Ask Gemini for analysis
         prompt = f"""
         You are an expert interview evaluator.
         Analyze this interview answer for question ID {qid} and return JSON in this exact format:
