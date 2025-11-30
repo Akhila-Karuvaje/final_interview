@@ -12,40 +12,37 @@ import json
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
-# ----------------- CRITICAL FIX: Download NLTK Data FIRST -----------------
-print("🔧 Downloading NLTK data BEFORE importing nltk...")
+# ----------------- ULTIMATE NLTK FIX -----------------
+print("🔧 Setting up NLTK with WordNet workaround...")
 
-import subprocess
+# Set environment variable to prevent NLTK from auto-loading WordNet
+os.environ['NLTK_DATA'] = '/root/nltk_data'
+
+# Monkey-patch to prevent WordNet loading during import
 import sys
+from unittest.mock import MagicMock
 
-# Download using Python subprocess to avoid importing nltk
+# Create a fake wordnet module that doesn't crash
+fake_wordnet = MagicMock()
+fake_wordnet.morphy = MagicMock(return_value=None)
+sys.modules['nltk.corpus.wordnet'] = fake_wordnet
+
+# NOW we can safely import nltk
+import nltk
+
+# Remove the fake module after import
+if 'nltk.corpus.wordnet' in sys.modules:
+    del sys.modules['nltk.corpus.wordnet']
+
+# Set NLTK data paths
 nltk_data_dir = '/root/nltk_data'
 os.makedirs(nltk_data_dir, exist_ok=True)
+nltk.data.path.insert(0, nltk_data_dir)
 
-resources = ['wordnet', 'omw-1.4', 'punkt', 'punkt_tab', 'stopwords']
-for resource in resources:
-    try:
-        # Use subprocess to download without importing nltk modules
-        result = subprocess.run(
-            [sys.executable, '-m', 'nltk.downloader', '-d', nltk_data_dir, resource],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        if result.returncode == 0:
-            print(f"  ✅ {resource} downloaded")
-        else:
-            print(f"  ℹ️ {resource} may already exist or download failed")
-    except Exception as e:
-        print(f"  ⚠️ Error downloading {resource}: {e}")
+print(f"📂 NLTK data path: {nltk_data_dir}")
 
-print("📦 NLTK data download complete, now importing nltk...")
-
-# ----------------- NOW SAFE TO IMPORT NLTK -----------------
-import nltk
+# Download NLTK data (now that nltk is imported)
 import ssl
-
-# Disable SSL verification for NLTK
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
@@ -53,26 +50,46 @@ except AttributeError:
 else:
     ssl._create_default_https_context = _create_unverified_https_context
 
-# Set NLTK data paths
-nltk.data.path.insert(0, nltk_data_dir)
-nltk.data.path.insert(0, os.path.join(os.getcwd(), 'nltk_data'))
+resources = ['wordnet', 'omw-1.4', 'punkt', 'punkt_tab', 'stopwords']
+print("📥 Downloading NLTK resources...")
+for resource in resources:
+    try:
+        # Check if already exists
+        if resource in ['wordnet', 'stopwords']:
+            path = f'corpora/{resource}'
+        elif resource == 'omw-1.4':
+            path = 'corpora/omw-1.4'
+        else:
+            path = f'tokenizers/{resource}'
+        
+        try:
+            nltk.data.find(path)
+            print(f"  ✅ {resource} already exists")
+        except LookupError:
+            print(f"  ⏳ Downloading {resource}...")
+            nltk.download(resource, download_dir=nltk_data_dir, quiet=True)
+            print(f"  ✅ {resource} downloaded")
+    except Exception as e:
+        print(f"  ⚠️ {resource} download failed: {e}")
 
-print(f"📂 NLTK data paths: {nltk.data.path[:2]}")
-
-# Import NLTK utilities
+# NOW import NLTK utilities
+print("📦 Importing NLTK utilities...")
 try:
     from nltk.tokenize import word_tokenize
     from nltk.corpus import stopwords
     print("✅ NLTK ready!")
 except Exception as e:
-    print(f"⚠️ NLTK import warning: {e}")
+    print(f"⚠️ NLTK import error: {e}")
     # Fallback functions
     def word_tokenize(text):
         return text.split()
+    
     class DummyStopwords:
-        def words(self, lang):
-            return set()
+        def words(self, lang='english'):
+            return {'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being'}
+    
     stopwords = DummyStopwords()
+    print("⚠️ Using fallback tokenizer and stopwords")
 
 # ----------------- GOOGLE AI CONFIG -----------------
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
